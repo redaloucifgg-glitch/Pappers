@@ -37,8 +37,8 @@ DEPARTEMENTS = (
     + ["2A", "2B", "971", "972", "973", "974", "976"]
 )
 
-COLONNES = ["siren", "siret_siege", "nom", "enseigne", "adresse",
-            "code_postal", "ville", "date_creation", "gerants",
+COLONNES = ["siren", "siret_siege", "nom", "enseigne", "categorie_juridique",
+            "adresse", "code_postal", "ville", "date_creation", "gerants",
             "source", "date_collecte"]
 
 FORCE = False
@@ -86,6 +86,9 @@ def ligne_de(e, s):
         "siret_siege": s.get("siret") or "",
         "nom": e.get("nom_complet") or "",
         "enseigne": " | ".join(enseignes),
+        # code INSEE de catégorie juridique (ex. 1000 = entrepreneur individuel,
+        # 5710 = SAS, 5499 = SARL, 5498 = EURL)
+        "categorie_juridique": e.get("nature_juridique") or "",
         "adresse": s.get("adresse") or "",
         "code_postal": s.get("code_postal") or "",
         "ville": s.get("libelle_commune") or "",
@@ -217,3 +220,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+        
