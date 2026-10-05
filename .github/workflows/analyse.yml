@@ -1,0 +1,56 @@
+name: Analyser agences
+
+on:
+  workflow_dispatch:
+    inputs:
+      seuil:
+        description: "Un nom présent N fois ou plus = réseau probable"
+        required: false
+        default: "5"
+      export:
+        description: "Écrire aussi export/agences_segmentees.csv (true/false)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+
+# même groupe que sirene.yml : pas d'analyse pendant une récupération
+concurrency:
+  group: sirene
+  cancel-in-progress: false
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Analyser
+        env:
+          SEUIL: ${{ github.event.inputs.seuil }}
+          EXPORT: ${{ github.event.inputs.export }}
+        run: |
+          if [ "$EXPORT" = "true" ]; then
+            python analyse_agences.py --seuil "$SEUIL" --export
+          else
+            python analyse_agences.py --seuil "$SEUIL"
+          fi
+      - name: Résumé dans l'onglet du workflow
+        run: cat rapports/analyse.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit des résultats
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add rapports/ export/ 2>/dev/null || git add rapports/
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Analyse des agences"
+          for i in 1 2 3 4; do
+            git push && exit 0
+            git pull --rebase
+            sleep $((2 * i))
+          done
+          exit 1
