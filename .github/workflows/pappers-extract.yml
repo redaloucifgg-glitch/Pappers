@@ -1,0 +1,88 @@
+name: pappers-extract
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Nb d'agences max (0 = tout ; mets 40 pour un premier test)"
+        default: "0"
+      timeout:
+        description: "Timeout Tavily par page en secondes (1-60)"
+        default: "30"
+      workers:
+        description: "Requêtes en parallèle"
+        default: "6"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: pappers-extract
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Extraction (tranches de 20 min, commit après chaque tranche)
+        id: extract
+        run: |
+          set -u
+          START=$(date +%s)
+          TOTAL_BUDGET=$((5*3600 + 15*60))   # 5h15 max, le job s'arrête proprement avant la limite GitHub
+          SLICE_MAX=1200                      # 20 min entre deux sauvegardes
+          code=10
+          while [ "$code" -eq 10 ]; do
+            REMAIN=$(( TOTAL_BUDGET - ( $(date +%s) - START ) ))
+            [ "$REMAIN" -lt 300 ] && break
+            SLICE=$(( REMAIN < SLICE_MAX ? REMAIN : SLICE_MAX ))
+            python scripts/pappers_extract.py \
+              --csv data/agences_tier_A.csv --out pappers \
+              --limit "${{ inputs.limit }}" \
+              --timeout "${{ inputs.timeout }}" \
+              --workers "${{ inputs.workers }}" \
+              --max-runtime "$SLICE"
+            code=$?
+            # SAUVEGARDE : commit + push à chaque tranche
+            git add pappers
+            git diff --cached --quiet || git commit -q -m "pappers: sauvegarde $(date -u +%H:%M) UTC"
+            for i in 1 2 3; do git pull --rebase -q && git push -q && break || sleep 5; done
+          done
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Rapport d'analyse
+        if: always()
+        run: |
+          python scripts/pappers_extract.py --csv data/agences_tier_A.csv --out pappers --report-only
+          git add pappers
+          git diff --cached --quiet || git commit -q -m "pappers: rapport d'analyse"
+          for i in 1 2 3; do git pull --rebase -q && git push -q && break || sleep 5; done
+
+      - name: Relance automatique s'il reste des agences
+        if: steps.extract.outputs.code == '10' && inputs.limit == '0'
+        run: gh workflow run pappers-extract.yml -f limit=0 -f timeout=${{ inputs.timeout }} -f workers=${{ inputs.workers }}
+
+      - name: Échec si toutes les clés sont épuisées
+        if: steps.extract.outputs.code == '2'
+        run: |
+          echo "::error::Toutes les clés Tavily sont épuisées ou invalides. Voir pappers/_report/analyse.md"
+          exit 1
