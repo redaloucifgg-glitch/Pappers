@@ -1,1 +1,2 @@
 {"start": "2026-10-06T13:12:57+00:00", "end": "2026-10-06T13:13:02+00:00", "duration_s": 5, "ok": 40, "failed": 0, "batches": 2, "credits": 8, "remaining": 45245, "exit": 0, "reasons": {}}
+{"start": "2026-10-06T13:20:11+00:00", "end": "2026-10-06T13:40:23+00:00", "duration_s": 1211, "ok": 28690, "failed": 30, "batches": 1436, "credits": 5729, "remaining": 16555, "exit": 10, "reasons": {"autre": 30}}
