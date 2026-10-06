@@ -1,0 +1,38 @@
+name: Analyser pappers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pappers-analyse
+  cancel-in-progress: false
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Analyser les JSONL
+        run: python analyser_pappers.py
+      - name: Résumé dans l'onglet du workflow
+        run: cat pappers_analyse/rapport_pappers.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit des résultats
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pappers_analyse/rapport_pappers.md
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Analyse Pappers"
+          for i in 1 2 3 4; do
+            git push && exit 0
+            git pull --rebase
+            sleep $((2 * i))
+          done
+          exit 1
