@@ -2,25 +2,23 @@
 
 Étapes (dans cet ordre, le premier motif trouvé exclut la ligne) :
   1. doublons de SIREN
-  2. NON DIFFUSIBLE
+  2. NON DIFFUSIBLE et sociétés en liquidation (un dirigeant "Liquidateur")
   3. catégories juridiques non retenues (on garde uniquement 1xxx = entrepreneur
      individuel et 5xxx = sociétés commerciales ; 1700 = agent commercial exclu)
   4. réseaux et franchises (mots-clés sur nom + enseigne)
   5. mandataires (mots-clés sur nom + enseigne)
+  6. domiciliation : société dont l'adresse est partagée par 3 sociétés ou plus
 
 Tiers des lignes gardées :
   A = sociétés (SARL, SAS, SA, SNC...)           -> cible prioritaire
   B = entrepreneurs individuels AVEC enseigne     -> à vérifier
   C = entrepreneurs individuels sans enseigne     -> mis de côté
 
-Chaque ligne reçoit un `score` de 0 à 5 (ancienneté, dirigeants, enseigne), simple
-aide au tri avant l'enrichissement Google. Il n'est pas un jugement de qualité.
-
 Sorties :
-  export/agences_tier_A.csv      sociétés (cible prioritaire), triées par score
+  export/agences_tier_A.csv      sociétés (cible prioritaire), 
   export/agences_tier_B.csv      entrepreneurs individuels avec enseigne
   export/agences_tier_C.csv      entrepreneurs individuels sans enseigne (de côté)
-                                 (chaque ligne : tier, score, requete_places)
+                                 (chaque ligne : tier, requete_places)
   export/agences_exclues.csv     lignes exclues + motif_exclusion (pour auditer)
   export/noms_a_verifier.csv     noms répétés non détectés : réseaux possibles
   export/echantillon_test.csv    (si --deps) échantillon tier A pour le test
@@ -28,7 +26,7 @@ Sorties :
 
 Usage : python nettoyer_agences.py
         python nettoyer_agences.py --deps 75,06,13 --n 1000
-        python nettoyer_agences.py --seuil 8
+        python nettoyer_agences.py --seuil 8 --seuil-adresse 4
 
 Les listes de mots-clés viennent de analyse_agences.py ; ajoutez les vôtres dans
 RESEAUX_EXTRA / MANDATAIRES_EXTRA ci-dessous.
@@ -57,6 +55,8 @@ def motif_exclusion(l):
     texte = norm(f"{l.get('nom', '')} {l.get('enseigne', '')}")
     if "NON DIFFUSIBLE" in texte or (l.get("nom") or "").strip() == "[ND]":
         return "non diffusible"
+    if "Liquidateur" in (l.get("gerants") or ""):
+        return "en liquidation"
     cat = (l.get("categorie_juridique") or "").strip()
     if cat == "1700":
         return "agent commercial (cat. 1700)"
@@ -77,20 +77,11 @@ def tier(l):
     return "B" if (l.get("enseigne") or "").strip() else "C"
 
 
-def score(l, annee):
-    s = 0
-    a = (l.get("date_creation") or "")[:4]
-    if a.isdigit():
-        age = annee - int(a)
-        s += 2 if age >= 5 else 1 if age >= 2 else 0
-    g = (l.get("gerants") or "").strip()
-    if g:
-        s += 1
-        if len(g.split(" | ")) >= 2:
-            s += 1
-    if (l.get("enseigne") or "").strip():
-        s += 1
-    return s
+def cle_adresse(l):
+    adr = norm(l.get("adresse") or "")
+    if not adr or "NON DIFFUSIBLE" in adr:
+        return ""
+    return norm(f"{adr} {l.get('code_postal') or ''}")
 
 
 def requete_places(l):
@@ -112,6 +103,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seuil", type=int, default=5,
                     help="un nom présent N fois ou plus est listé à vérifier")
+    ap.add_argument("--seuil-adresse", type=int, default=3,
+                    help="société exclue si son adresse est partagée par N sociétés ou plus")
     ap.add_argument("--deps", default="",
                     help="départements de l'échantillon test, ex. 75,06,13")
     ap.add_argument("--n", type=int, default=1000, help="taille de l'échantillon")
@@ -121,7 +114,6 @@ def main():
     if "categorie_juridique" not in colonnes:
         raise SystemExit("Colonne categorie_juridique absente : relancez "
                          "fetch_sirene.py avec --force.")
-    annee = date.today().year
     lus = len(lignes)
 
     # 1. doublons de SIREN
@@ -143,10 +135,21 @@ def main():
             motifs[m.split(" : ")[0]] += 1
         else:
             l["tier"] = tier(l)
-            l["score"] = score(l, annee)
             l["requete_places"] = requete_places(l)
             gardees.append(l)
-    gardees.sort(key=lambda l: (l["tier"], -l["score"]))
+
+    # 6. domiciliation : adresse partagée par plusieurs sociétés
+    adresses = Counter(cle_adresse(l) for l in gardees if l["tier"] == "A")
+    apres = []
+    for l in gardees:
+        k = cle_adresse(l)
+        if l["tier"] == "A" and k and adresses[k] >= a.seuil_adresse:
+            l["motif_exclusion"] = "domiciliation : adresse partagée"
+            exclues.append(l)
+            motifs["domiciliation"] += 1
+        else:
+            apres.append(l)
+    gardees = sorted(apres, key=lambda l: l["tier"])
 
     # noms répétés non détectés par les mots-clés
     noms, exemples, deps = Counter(), defaultdict(list), defaultdict(set)
@@ -163,7 +166,7 @@ def main():
 
     # sorties
     print("Écriture :")
-    sortie = colonnes + ["tier", "score", "requete_places"]
+    sortie = colonnes + ["tier", "requete_places"]
     for t in "ABC":
         ecrire(f"{DOSSIER_EXPORT}/agences_tier_{t}.csv", sortie,
                [l for l in gardees if l["tier"] == t])
@@ -178,8 +181,7 @@ def main():
         rnd = random.Random(42)
         for d in liste:
             cand = [l for l in gardees if l["tier"] == "A" and l["_dep"] == d]
-            rnd.shuffle(cand)                       # départage les égalités
-            cand.sort(key=lambda l: -l["score"])    # tri stable : meilleurs d'abord
+            rnd.shuffle(cand)                       # tirage aléatoire reproductible
             echantillon += cand[:part]
         ecrire(f"{DOSSIER_EXPORT}/echantillon_test.csv", sortie, echantillon)
 
@@ -196,9 +198,6 @@ def main():
     R += ["## Tiers", ""]
     R += tableau(["Tier", "Lignes", "Part"],
                  [(t, par_tier[t], pct(par_tier[t], len(gardees))) for t in "ABC"]) + [""]
-    sc = Counter(l["score"] for l in gardees if l["tier"] == "A")
-    R += ["## Score du tier A (0 à 5)", ""]
-    R += tableau(["Score", "Lignes"], [(s, sc[s]) for s in sorted(sc, reverse=True)]) + [""]
     for titre, prefixe, nb in (("Catégories exclues (top 15)", "catégorie non retenue", 15),
                                ("Réseaux exclus (top 15)", "réseau", 15),
                                ("Mandataires exclus (top 10)", "mandataire", 10)):
@@ -225,3 +224,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+  
