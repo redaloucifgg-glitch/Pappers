@@ -1,0 +1,38 @@
+name: Compter enseignes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pappers-analyse
+  cancel-in-progress: false
+
+jobs:
+  compter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compter les agences avec enseigne
+        run: python compter_enseignes.py | tee resume.txt
+      - name: Résumé dans l'onglet du workflow
+        run: cat resume.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit des résultats
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add export/agences_avec_enseigne.csv
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Agences avec enseigne entre parenthèses"
+          for i in 1 2 3 4; do
+            git push && exit 0
+            git pull --rebase
+            sleep $((2 * i))
+          done
+          exit 1
